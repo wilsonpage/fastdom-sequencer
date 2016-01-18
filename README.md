@@ -78,3 +78,16 @@ sequencer.mutate(element, function() {
 - Is deferred by any incomplete `.interactions()`
 - Run instantly if no `.interactions()` are happening
 - Internally run inside `sequencer.mutate()` as DOM changes will be required to trigger animation
+
+### Chaining
+
+Tasks can be chained together so that they happen sequencially in series.
+
+```js
+sequencer
+  .mutate(() => list.appendChild(item))
+  .animate(item, () => item.classList.add('reveal'))
+  .then(() => {
+    console.log('all done');
+  });
+```

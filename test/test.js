@@ -5,16 +5,13 @@ suite('fastdom', function() {
   var dom;
   var el;
 
-  setup(function() {
-    // sequencer = fastdom.extend(fastdomSequence);
-    dom = document.createElement('div');
+  document.body.style.margin = 0;
 
-    // el = document.createElement('div');
-    // el.style.width = el.style.height = '100px';
-    // el.style.transition = 'transform 300ms';
-    //
+  setup(function(done) {
+    dom = document.createElement('div');
     el = document.createElement('div');
     el.style.height = el.style.width = '100px';
+    el.style.transition = 'transform 300ms';
     el.style.overflowY = 'scroll';
     var scrollContent = document.createElement('div');
     scrollContent.style.height = '1000%';
@@ -22,18 +19,25 @@ suite('fastdom', function() {
     dom.appendChild(el);
 
     document.body.appendChild(dom);
+
+    // wait for layout before animating
+    setTimeout(done, 100);
   });
 
   teardown(function() {
-    // dom.remove();
+    dom.remove();
   });
 
   suite('.on()', function() {
-    test('it can bind events', function() {
+    test('it can bind events', function(done) {
       var spy = sinon.spy();
       sequencer.on(el, 'click', spy);
       el.dispatchEvent(new CustomEvent('click'));
-      sinon.assert.calledOnce(spy);
+
+      requestAnimationFrame(() => {
+        sinon.assert.calledOnce(spy);
+        done();
+      });
     });
 
     test('nested `.animate()`s are not blocked', function(done) {
@@ -43,14 +47,13 @@ suite('fastdom', function() {
         return sequencer.animate(el, function() {
           el.style.transform = 'translateY(100%)';
           assert.isAtMost(Date.now() - start, 100);
-          done();
-        });
+        }).then(done);
       });
 
       el.dispatchEvent(new CustomEvent('click'));
     });
 
-    test.only('it does not run more than 1 callback per frame', function(done) {
+    test('it does not run more than 1 callback per frame', function(done) {
       var scroll = sinon.spy();
       var mutation = sinon.spy();
 
@@ -71,33 +74,60 @@ suite('fastdom', function() {
       });
     });
 
-    test.only('it does not run more than 1 callback per frame', function(done) {
-      var scroll = sinon.spy();
-      var mutation = sinon.spy();
+    test('scope is restored when a callback throws', function(done) {
+      var spy = sinon.spy();
 
-      el.addEventListener('scroll', scroll);
-
-      sequencer.on(el, 'scroll', e => {
-        return sequencer.mutate(mutation);
+      sequencer.on(el, 'click', function() {
+        return sequencer.mutate(function() {
+          spy();
+          throw new Error('ahhh');
+        });
       });
 
-      el.dispatchEvent(new CustomEvent('scroll'));
-      el.dispatchEvent(new CustomEvent('scroll'));
-      el.dispatchEvent(new CustomEvent('scroll'));
+      el.dispatchEvent(new CustomEvent('click'));
 
       requestAnimationFrame(() => {
-        sinon.assert.calledThrice(scroll);
-        sinon.assert.calledOnce(mutation);
+        sinon.assert.calledOnce(spy);
+        assert.equal(sequencer.scope, null);
         done();
       });
     });
   });
 
-  suite('.animate()', function() {
-    setup(function() {
-      el.style.transition = 'transform 300ms';
+  suite('.off()', function() {
+    test('callback no longer fires', function(done) {
+      var spy = sinon.spy();
+
+      sequencer.on(el, 'click', spy);
+      el.dispatchEvent(new CustomEvent('click'));
+      sequencer.off(el, 'click', spy);
+      el.dispatchEvent(new CustomEvent('click'));
+
+      requestAnimationFrame(() => {
+        sinon.assert.calledOnce(spy);
+        done();
+      });
     });
 
+    test('queued tasks are immediately run', function(done) {
+      var callback = sinon.spy();
+      var start = Date.now();
+
+      sequencer.on(el, 'touchmove', callback);
+
+      el.dispatchEvent(new CustomEvent('touchmove'));
+
+      sequencer.mutate(() => {
+        var elapsed = Date.now() - start;
+        assert.isAtMost(elapsed, 100);
+        done();
+      });
+
+      sequencer.off(el, 'touchmove', callback);
+    });
+  });
+
+  suite('.animate()', function() {
     test('it resolves when the animation ends', function() {
       var start = Date.now();
 
@@ -111,11 +141,10 @@ suite('fastdom', function() {
       });
     });
 
-    test('are blocked by pending interactions', function() {
+    test('are blocked by pending interactions', function(done) {
       var interaction = 300;
       var animation = 300;
-      var buffer = sequencer.BUFFER;
-      var expected = interaction + animation + buffer;
+      var expected = interaction + animation;
 
       sequencer.on(el, 'click', e => {
         return new Promise(resolve => {
@@ -127,25 +156,175 @@ suite('fastdom', function() {
 
       var start = Date.now();
 
-      return sequencer.animate(el, () => {
+      sequencer.animate(el, () => {
         el.style.transform = 'translateY(100%)';
       })
 
       .then(() => {
         var elapsed = Date.now() - start;
         assert.isAtLeast(elapsed, expected);
+      })
+
+      .then(done)
+      .catch(done);
+    });
+
+    test('it resolves after the (optional) safety timeout when `...end` does not fire', function() {
+      var start;
+
+      return sequencer.animate(el, 100, () => {
+          start = Date.now();
+          // do nothing ...
+        })
+
+        .then(() => {
+          var elapsed = Date.now() - start;
+          assert.isAtMost(elapsed, 150);
+        });
+    });
+  });
+
+  suite('.mutate()', function() {
+    test('its run instantly when no unfinished interactions', function(done) {
+      var spy = sinon.spy();
+
+      sequencer.mutate(spy);
+
+      requestAnimationFrame(() => {
+        sinon.assert.calledOnce(spy);
+        done();
+      });
+    });
+
+    test('is blocked by pending interactions', function() {
+      var interaction = 300;
+      var expected = interaction;
+
+      sequencer.on(el, 'click', e => {
+        return new Promise(resolve => {
+          setTimeout(resolve, interaction);
+        });
+      });
+
+      el.dispatchEvent(new CustomEvent('click'));
+
+      var start = Date.now();
+
+      return sequencer.mutate(() => {})
+
+      .then(() => {
+        var elapsed = Date.now() - start;
+        assert.isAtLeast(elapsed, expected);
+      });
+    });
+
+    test('blocked by ongoing animation', function() {
+      var mutationTask = sinon.spy();
+      var animationEnded = sinon.spy();
+
+      var animation = sequencer.animate(el, () => {
+        el.style.transform = 'translateY(100%)';
+      })
+
+      .then(() => sequencer.animate(el, () => {
+        el.style.transform = 'translateY(0%)';
+      }))
+
+      .then(animationEnded);
+
+      var mutation = sequencer.mutate(mutationTask);
+
+      return Promise.all([
+        animation,
+        mutation
+      ])
+
+      .then(() => {
+        assert.isTrue(mutationTask.calledAfter(animationEnded));
       });
     });
   });
 
-  suite.skip('wrappedpromise', function() {
+  suite('.clear()', function() {
+    test('mutate', function(done) {
+      var spy = sinon.spy();
+      var task = sequencer.mutate(spy);
+
+      sequencer.clear(task);
+
+      requestAnimationFrame(() => {
+        sinon.assert.notCalled(spy);
+        done();
+      });
+    });
+
+    test('mutate (queued)', function(done) {
+      var defer = new Deferred();
+      var onmutation = sinon.spy();
+      var onclick = sinon.spy();
+
+      sequencer.on(el, 'click', e => {
+        onclick();
+        return defer.promise;
+      });
+
+      el.dispatchEvent(new CustomEvent('click'));
+
+      var task = sequencer.mutate(onmutation);
+      sequencer.clear(task);
+
+      defer.resolve();
+
+      requestAnimationFrame(() => {
+        Promise.resolve().then(() => {
+          sinon.assert.calledOnce(onclick);
+          sinon.assert.notCalled(onmutation);
+          done();
+        });
+      });
+    });
+  });
+
+  suite('chaining', function() {
+    test('tasks are called once the previous one completes', function() {
+      var spys = [sinon.spy(), sinon.spy(), sinon.spy()];
+
+      return sequencer
+        .mutate(() => {
+          el.style.height = '50px';
+          el.style.background = 'red';
+          el.style.transition = 'transform 200ms';
+          spys[0]();
+          return el;
+        })
+
+        .animate(el, () => {
+          el.style.transform = 'translateY(100%)';
+          spys[1]();
+          return el;
+        })
+
+        .animate(400, el => {
+          var rects = el.getBoundingClientRect();
+          assert.equal(rects.top, 50);
+          el.style.transform = 'translateY(0%)';
+          spys[2]();
+        });
+    });
+  });
+
+  suite('SequencerPromise', function() {
     test('chained .then()s are all wrapped', function() {
       var defer = new Deferred();
       var state = 'not-running';
 
-      var wrapped = new sequencer.WrappedPromise(defer.promise, {
-        before: () => state = 'running',
-        after: () => state = 'not-running'
+      var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
+        wrapper: (callback, args) => {
+          state = 'running';
+          var result = callback.apply(this, args);
+          state = 'not-running';
+          return result;
+        }
       });
 
       defer.resolve();
@@ -163,9 +342,13 @@ suite('fastdom', function() {
       var defer = new Deferred();
       var state = 'not-running';
 
-      var wrapped = new sequencer.WrappedPromise(defer.promise, {
-        before: () => state = 'running',
-        after: () => state = 'not-running'
+      var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
+        wrapper: (callback, args) => {
+          state = 'running';
+          var result = callback.apply(this, args);
+          state = 'not-running';
+          return result;
+        }
       });
 
       defer.reject('boo');
@@ -175,7 +358,6 @@ suite('fastdom', function() {
       })
 
       .catch(() => {
-        console.log('2');
         assert.equal(state, 'running');
       });
     });
@@ -184,9 +366,13 @@ suite('fastdom', function() {
       var defer = new Deferred();
       var state = 'not-running';
 
-      var wrapped = new sequencer.WrappedPromise(defer.promise, {
-        before: () => state = 'running',
-        after: () => state = 'not-running'
+      var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
+        wrapper: (callback, args) => {
+          state = 'running';
+          var result = callback.apply(this, args);
+          state = 'not-running';
+          return result;
+        }
       });
 
       defer.resolve('foo');
@@ -204,9 +390,13 @@ suite('fastdom', function() {
       var defer = new Deferred();
       var state = 'not-running';
 
-      var wrapped = new sequencer.WrappedPromise(defer.promise, {
-        before: () => state = 'running',
-        after: () => state = 'not-running'
+      var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
+        wrapper: (callback, args) => {
+          state = 'running';
+          var result = callback.apply(this, args);
+          state = 'not-running';
+          return result;
+        }
       });
 
       defer.resolve('foo');
