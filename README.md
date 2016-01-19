@@ -1,22 +1,39 @@
-# sequencer
+# fastdom-sequencer
+
+A [`fastdom`](http://github.com/wilsonpage/fastdom) extension that prioritises tasks and executes them in 'sequence' for the best possible render performance.
+
+- User interactions are 'protected' from tasks that cause jank
+- Animations/transitions are 'protected' from DOM measurements and mutations that cause jank
+- Clean `Promise` based API
+
+## Usage
+
+```js
+var sequencer = require('fastdom-sequencer')
+```
+
+or
+
+```html
+<script src="node_modules/fastdom/fastdom.js"></script>
+<script src="node_modules/fastdom-sequencer/fastdom-sequencer.js"></script>
+```
 
 ## API
 
-### sequencer#interaction()
+### sequencer#on()
 
-Indicates a high-priority interaction that should defer any `.animation()`s or `.mutation()`s that are executed elsewhere in the app. This protects any interaction related UI changes from jank.
+Binds a high-priority interaction that defers any `.animate()` or `.mutate()` task that are executed elsewhere in the app. This protects any interaction related UI changes from jank.
 
 ```js
-sequencer.interaction(element, 'scroll', function(e) {
-  sequencer.mutate(function() {
-    // ...
-  });
+sequencer.on(element, 'scroll', function(e) {
+  sequencer.mutate(...);
 });
 ```
 
 ```js
-sequencer.interaction(element, 'click', function(e) {
-  return sequencer.animation(element, function() {
+sequencer.on(element, 'click', function(e) {
+  return sequencer.animate(element, function() {
     element.classList.add('grow');
   });
 });
@@ -24,21 +41,9 @@ sequencer.interaction(element, 'click', function(e) {
 
 ```js
 sequencer.on(element, 'click', function(e) {
-  return sequencer.animation(element, function() {
-    element.classList.add('grow');
-  });
-});
-```
-
-```js
-sequencer.on(element, 'click', function(e) {
-  return sequencer.animation(element, function() {
-    element.classList.add('grow');
-  }).then(function() {
-    return sequencer.animation(element, function() {
-      element.classList.add('shrink');
-    });
-  });
+  return sequencer
+    .animate(element, () => element.classList.add('grow')
+    .animate(element, () => element.classList.add('shrink');
 });
 ```
 
@@ -46,22 +51,22 @@ sequencer.on(element, 'click', function(e) {
 sequencer.off(element, 'click', callback);
 ```
 
-- `.animation()` or `.mutate()` tasks inside the `.interaction()` callbacks are run instantly and not deferred.
+- `.animate()` or `.mutate()` tasks inside the `.interaction()` callbacks are run instantly and not deferred.
 
-### sequencer#animation()
+### sequencer#animate()
 
 Should contain any animation/transition code.
 
 ```js
-sequencer.animation(element, function() {
-  element.style.transform = 'translateY(100%)';
-}).then(function() {
-  // transition/animation end
-});
+sequencer
+  .animate(element, () => element.style.transform = 'translateY(100%)'))
+  .then(() => {
+    // transition/animation end
+  });
 ```
 
-- Is deferred by any incomplete `.interactions()`
-- Run instantly if no `.interactions()` are happening
+- Is deferred by any incomplete `.on()` interactions
+- Run instantly if no `.on()` interactions are happening
 - Internally run inside `sequencer.mutate()` as DOM changes will be required to trigger animation
 
 ### sequencer#mutate()
@@ -69,7 +74,7 @@ sequencer.animation(element, function() {
 Should contain any code that is likely to cause document reflow/layout.
 
 ```js
-sequencer.mutate(element, function() {
+sequencer.mutate(element, () => {
   var li = document.createElement('li');
   list.appendChild(li);
 });
@@ -85,9 +90,10 @@ Tasks can be chained together so that they happen sequencially in series.
 
 ```js
 sequencer
-  .mutate(() => list.appendChild(item))
+  .measure(() => list.clientHeight)
+  .mutate(height => list.appendChild(item))
   .animate(item, () => item.classList.add('reveal'))
   .then(() => {
-    console.log('all done');
+    console.log('all done!');
   });
 ```

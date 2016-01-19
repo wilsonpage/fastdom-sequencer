@@ -1,25 +1,24 @@
 {
-  "name": "fastdom-sequence",
+  "name": "fastdom-sequencer",
   "description": "",
   "version": "1.0.0",
-  "main": "fastdom-sequence.js",
+  "main": "fastdom-sequencer.js",
   "scripts": {
     "unit": "karma start test/karma.conf.js --single-run",
     "test": "npm run -s unit && npm run -s lint",
     "test-dev": "karma start test/karma.conf.js --browsers Firefox",
     "coveralls": "cat test/coverage/lcov.info | coveralls",
-    "compress": "uglifyjs fastdom-sequence.js --compress='drop_console,sequences,dead_code,booleans,conditionals,unused,if_return,join_vars,pure_funcs=\"debug\"' --mangle --reserved='require,define,module,exports' > fastdom-sequence.min.js",
-    "build": "webpack && npm run -s compress",
+    "build": "webpack",
     "watch": "webpack -w"
   },
-  "homepage": "https://github.com/wilsonpage/fastdom-sequence",
+  "homepage": "https://github.com/wilsonpage/fastdom-sequencer",
   "author": {
     "name": "Wilson Page",
     "email": "wilsonpage@me.com"
   },
   "repository": {
     "type": "git",
-    "url": "git://github.com/wilsonpage/fastdom-sequence.git"
+    "url": "git://github.com/wilsonpage/fastdom-sequencer.git"
   },
   "license": "MIT",
   "devDependencies": {
