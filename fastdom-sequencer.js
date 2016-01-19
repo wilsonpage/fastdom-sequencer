@@ -54,14 +54,18 @@ return /******/ (function(modules) { // webpackBootstrap
 /* 0 */
 /***/ function(module, exports, __webpack_require__) {
 
-	
-	var promised = __webpack_require__(1);
+
 	var fastdom = __webpack_require__(2);
 
 	var debug = 1 ? console.log.bind(console, '[sequencer]') : function() {};
 	var symbol = Symbol();
 
-
+	/**
+	 * Intialize a new `Sequencer`
+	 *
+	 * @constructor
+	 * @param {FastDom} fastdom
+	 */
 	function Sequencer(fastdom) {
 	  this.fastdom = fastdom;
 	  this.interactions = [];
@@ -109,15 +113,14 @@ return /******/ (function(modules) { // webpackBootstrap
 	   */
 	  on: function(el, type, task) {
 	    debug('on', el.localName, type);
-
-	    var scoped = this.scopeFn(task, 'interaction');
+	    var scoped = this.scopeFn('interaction', task);
 	    var data = el[symbol] || (el[symbol] = {
 	      callbacks: {},
 	      pending: {},
 	      interactions: {}
 	    });
 
-	    // only allow one binding per event type
+	    // only one binding per event type
 	    if (data.callbacks[type]) throw new Error('already listening');
 
 	    data.callbacks[type] = e => {
@@ -133,9 +136,42 @@ return /******/ (function(modules) { // webpackBootstrap
 	      });
 	    };
 
+	    // attach the wrapped callback
 	    on(el, type, data.callbacks[type]);
 	  },
 
+	  /**
+	   * Unbind a callback from an event.
+	   *
+	   * If an interaciton is not 'complete'
+	   * unbinding infers completion.
+	   *
+	   * @public
+	   * @param  {HTMLElement} el
+	   * @param  {String} type
+	   * @param  {Function} task
+	   */
+	  off: function(el, type, task) {
+	    var data = el[symbol];
+	    var callback = data.callbacks && data.callbacks[type];
+	    if (!callback) return;
+
+	    var interaction = data.interactions[type];
+	    interaction.resolve();
+
+	    off(el, type, callback);
+	    delete data.callbacks[type];
+	  },
+
+	  /**
+	   * Create an `Interaction` to represent
+	   * a user input and ongoing feedback
+	   * that may be triggered in response.
+	   *
+	   * @param  {HTMLElement} el
+	   * @param  {String} type
+	   * @return {Interaction}
+	   */
 	  createInteraction: function(el, type) {
 	    var interactions = el[symbol].interactions;
 	    var interaction = interactions[type];
@@ -156,18 +192,6 @@ return /******/ (function(modules) { // webpackBootstrap
 	    return interaction;
 	  },
 
-	  off: function(el, type, task) {
-	    var data = el[symbol];
-	    var callback = data.callbacks && data.callbacks[type];
-	    if (!callback) return;
-
-	    var interaction = data.interactions[type];
-	    interaction.resolve();
-
-	    off(el, type, callback);
-	    delete data.callbacks[type];
-	  },
-
 	  /**
 	   * Schedule a task that triggers a CSS animation
 	   * or transition on an element.
@@ -178,11 +202,18 @@ return /******/ (function(modules) { // webpackBootstrap
 	   * Animation tasks are postponed by incomplete:
 	   *   - interactions
 	   *
+	   * IDEA: Perhaps returning the Element would
+	   * be a better way to provide the animation
+	   * target?
+	   *
 	   * @example
 	   *
 	   * sequencer.animate(element, () => {
 	   *   return element.classList.add('slide-in');
 	   * }).then(...)
+	   *
+	   * // with optional safety timeout
+	   * sequencer.animate(element, 400, () => ...)
 	   *
 	   * @public
 	   * @param  {HTMLElement} el
@@ -191,26 +222,20 @@ return /******/ (function(modules) { // webpackBootstrap
 	   * @return {Promise}
 	   */
 	  animate: function(el, safety, task) {
-	    debug('animate', el.localName, this.scope);
+	    debug('animate (1)');
 
 	    // support optional second argument
 	    if (typeof safety == 'function') task = safety, safety = null;
 
 	    return this.after([this.interactions], () => {
-	      debug('animate (2)', el.localName);
-	      var scoped = this.scopeFn(task, this.scope, el).bind(this, el);
-	      var fdTask = fastdomTask('mutate', scoped);
+	      debug('animate (2)');
+	      var promise = this.task('mutate', task.bind(this, el));
 	      var result;
 
-	      var spromise = new SequencerPromise(this, fdTask.promise, {
-	        wrapper: this.promiseScoper(this.scope),
-	        oncancel: () => fastdom.clear(fdTask.task)
-	      });
-
-	      var complete = spromise
+	      var complete = promise
 	        .then(_result => {
 	          result = _result;
-	          return animationend(el, safety);
+	          return animationend(el || result, safety);
 	        })
 
 	        .then(() => {
@@ -220,6 +245,15 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	      this.animations.push(complete);
 	      return complete;
+	    });
+	  },
+
+	  task: function(type, fn, ctx) {
+	    var scoped = this.scopeFn(this.scope, fn);
+	    var task = fastdomTask('mutate', scoped, ctx);
+	    return new SequencerPromise(this, task.promise, {
+	      wrapper: this.scopeFn.bind(this, this.scope),
+	      oncancel: () => fastdom.clear(task.id)
 	    });
 	  },
 
@@ -246,12 +280,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	    debug('measure (1)');
 	    return this.after([this.interactions, this.animations], () => {
 	      debug('measure (2)');
-	      var scoped = this.scopeFn(task, this.scope);
-	      var fdTask = fastdomTask('measure', scoped);
-	      return new SequencerPromise(this, fdTask.promise, {
-	        wrapper: this.promiseScoper(this.scope),
-	        oncancel: () => fastdom.clear(fdTask.task)
-	      });
+	      return this.task('measure', task, ctx);
 	    });
 	  },
 
@@ -276,15 +305,16 @@ return /******/ (function(modules) { // webpackBootstrap
 	    debug('mutate (1)');
 	    return this.after([this.interactions, this.animations], () => {
 	      debug('mutate (2)');
-	      var scoped = this.scopeFn(task, this.scope);
-	      var fdTask = fastdomTask('mutate', scoped);
-	      return new SequencerPromise(this, fdTask.promise, {
-	        wrapper: this.promiseScoper(this.scope),
-	        oncancel: () => fastdom.clear(fdTask.task)
-	      });
+	      return this.task('mutate', task, ctx);
 	    });
 	  },
 
+	  /**
+	   * Clear a pending task.
+	   *
+	   * @public
+	   * @param  {SequencerPromise} promise
+	   */
 	  clear: function(promise) {
 	    debug('clear');
 	    if (promise.cancel) promise.cancel();
@@ -298,7 +328,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	   * @param  {String}   scope
 	   * @return {Function}
 	   */
-	  scopeFn: function(fn, scope) {
+	  scopeFn: function(scope, fn) {
 	    var self = this;
 	    return function() {
 	      var previous = self.scope;
@@ -309,27 +339,6 @@ return /******/ (function(modules) { // webpackBootstrap
 	      debug('set scope', self.scope);
 
 	      try { result = fn.apply(this, arguments); }
-	      catch (e) { error = e; }
-
-	      self.scope = previous;
-	      debug('restored scope', self.scope);
-	      if (error) throw error;
-
-	      return result;
-	    };
-	  },
-
-	  promiseScoper: function(scope) {
-	    var self = this;
-	    return function(callback, args) {
-	      var previous = self.scope;
-	      var result;
-	      var error;
-
-	      self.scope = scope;
-	      debug('set scope', self.scope);
-
-	      try { result = callback.apply(this, args); }
 	      catch (e) { error = e; }
 
 	      self.scope = previous;
@@ -375,7 +384,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	/**
 	 * Create a fastdom task wrapped in
-	 * a 'cancellable' Promise.
+	 * a Promise.
 	 *
 	 * @param  {FastDom}  fastdom
 	 * @param  {String}   type - 'measure'|'muatate'
@@ -383,16 +392,16 @@ return /******/ (function(modules) { // webpackBootstrap
 	 * @return {Promise}
 	 */
 	function fastdomTask(type, fn, ctx) {
-	  var task;
+	  var id;
 	  var promise = new Promise((resolve, reject) => {
-	    task = fastdom[type](function() {
+	    id = fastdom[type](function() {
 	      try { resolve(fn()); }
 	      catch (e) { reject(e); }
 	    }, ctx);
 	  });
 
 	  return {
-	    task: task,
+	    id: id,
 	    promise: promise
 	  };
 	}
@@ -400,6 +409,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	/**
 	 * Represents an interaction that
 	 * can last a period of time.
+	 *
+	 * TODO: Introduce specific paths for 'scroll'
+	 * and 'touchmove' events that listen to
+	 * 'scrollend' amd 'touchend' respectively.
 	 *
 	 * @constructor
 	 * @param {Srting} type
@@ -411,7 +424,6 @@ return /******/ (function(modules) { // webpackBootstrap
 	}
 
 	Interaction.prototype = {
-	  BUFFER: 300,
 
 	  /**
 	   * Define when the interaction should
@@ -420,7 +432,6 @@ return /******/ (function(modules) { // webpackBootstrap
 	   * @example
 	   *
 	   * // each call extends the debounce timer
-	   * interaction.reset();
 	   * interaction.reset();
 	   * interaction.reset();
 	   * interaction.reset();
@@ -458,7 +469,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	    // when no Promise is given we use a
 	    // debounce approach to judge completion
-	    this.timeout = setTimeout(() => this.resolve(), this.BUFFER);
+	    this.timeout = setTimeout(() => this.resolve(), 300);
 	  },
 
 	  /**
@@ -474,6 +485,62 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	var id = 0;
 
+	/**
+	 * Wraps a `Promise`, providing additional
+	 * functionality and hooks to wrap user
+	 * defined callbacks.
+	 *
+	 * A `SequencerPromise` is a link in a
+	 * chain of async tasks to be completed
+	 * in series.
+	 *
+	 * NOTE: Chained syntax is optional and does
+	 * not prevent users from using a familiar
+	 * Promise syntax.
+	 *
+	 * @example
+	 *
+	 * // before: lots of boilerplate
+	 * sequencer.mutate(...)
+	 *   .then(() => sequencer.measure(...))
+	 *   .then(() => sequencer.animate(...))
+	 *   .then(() => sequencer.animate(...))
+	 *   .then(...)
+	 *
+	 * // after: clean/terse
+	 * sequencer
+	 *   .mutate(...)
+	 *   .measure(...)
+	 *   .animate(...)
+	 *   .animate(...)
+	 *   .then(...)
+	 *
+	 * @example
+	 *
+	 * var li;
+	 *
+	 * sequencer
+	 *   .mutate(() => {
+	 *     li = document.createElement('li');
+	 *     list.appendChild(li);
+	 *     return li;
+	 *   })
+	 *
+	 *   // previous return value can be used
+	 *   // as target by omitting first argument
+	 *   .animate(li => li.classList.add('grow'))
+	 *
+	 *   // or pass target as first param
+	 *   .animate(li, () => li.classList.add('slide'));
+	 *
+	 * @constructor
+	 * @param {Sequencer} sequencer
+	 * @param {Promise} promise
+	 * @param {Object} [options]
+	 * @param {Function} [options.wrapper]
+	 * @param {SequencerPromise} [options.parent]
+	 * @param {Function} [options.oncancel]
+	 */
 	function SequencerPromise(sequencer, promise, options) {
 	  options = options || {};
 	  this.sequencer = sequencer;
@@ -487,24 +554,23 @@ return /******/ (function(modules) { // webpackBootstrap
 	}
 
 	SequencerPromise.prototype = {
-	  wrap: function(callback) {
+	  _wrap: function(callback) {
 	    if (!callback) return;
 	    var self = this;
-	    return function() {
+	    callback = this.wrapper(callback);
+	    return value => {
 	      if (self.canceled) return;
-	      var result = self.wrapper(callback, arguments);
+	      var result = callback(value);
 	      if (result && result.then) self.sibling = result;
 	      return result;
 	    };
 	  },
 
 	  then: function(onsuccess, onerror) {
-	    var promise = this.promise.then(
-	      this.wrap(onsuccess),
-	      this.wrap(onerror)
-	    );
-
-	    return this.create(promise);
+	    return this.create(this.promise.then(
+	      this._wrap(onsuccess),
+	      this._wrap(onerror)
+	    ));
 	  },
 
 	  create: function(promise) {
@@ -515,8 +581,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	  },
 
 	  catch: function(callback) {
-	    var promise = this.promise.catch(this.wrap(callback));
-	    return this.create(promise);
+	    return this.create(this.promise.catch(this._wrap(callback)));
 	  },
 
 	  cancel: function() {
@@ -530,24 +595,23 @@ return /******/ (function(modules) { // webpackBootstrap
 	  },
 
 	  measure: function(task, ctx) {
-	    var promise = this.promise.then(() => this.sequencer.measure(task, ctx));
-	    return this.create(promise);
+	    return this.create(this.promise.then(result =>
+	      this.sequencer.measure(() => task(result), ctx)));
 	  },
 
 	  mutate: function(task, ctx) {
-	    var promise = this.promise.then(() => this.sequencer.mutate(task, ctx));
-	    return this.create(promise);
+	    return this.create(this.promise.then(result =>
+	      this.sequencer.mutate(() => task(result), ctx)));
 	  },
 
 	  animate: function(el, safety, task) {
 
-	    // support various argument patterns
+	    // el and safety arguments are both optional
 	    if (typeof el == 'number') task = safety, safety = el, el = null;
 	    else if (typeof el == 'function') task = el, safety = el = null;
 
-	    return this.create(this.promise.then(result => {
-	      return this.sequencer.animate(el || result, safety, task);
-	    }));
+	    return this.create(this.promise.then(result =>
+	      this.sequencer.animate(el || result, safety, task)));
 	  }
 	};
 
@@ -601,6 +665,9 @@ return /******/ (function(modules) { // webpackBootstrap
 	  return defer.promise;
 	}
 
+	/**
+	 * @constructor
+	 */
 	function Deferred() {
 	  this.promise = new Promise((resolve, reject) => {
 	    this.resolve = resolve;
@@ -622,151 +689,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 
 /***/ },
-/* 1 */
-/***/ function(module, exports, __webpack_require__) {
-
-	var __WEBPACK_AMD_DEFINE_RESULT__;!(function() {
-
-	var debug = 0 ? console.log.bind(console, '[fastdom-promised]') : function() {};
-
-	/**
-	 * Wraps fastdom in a Promise API
-	 * for improved control-flow.
-	 *
-	 * @example
-	 *
-	 * // returning a result
-	 * fastdom.measure(() => el.clientWidth)
-	 *   .then(result => ...);
-	 *
-	 * // returning promises from tasks
-	 * fastdom.measure(() => {
-	 *   var w = el1.clientWidth;
-	 *   return fastdom.mutate(() => el2.style.width = w + 'px');
-	 * }).then(() => console.log('all done'));
-	 *
-	 * // clearing pending tasks
-	 * var promise = fastdom.measure(...)
-	 * fastdom.clear(promise);
-	 *
-	 * @type {Object}
-	 */
-	var exports = {
-	  mutate: function(fn, ctx) {
-	    return create(this.fastdom, 'mutate', fn, ctx);
-	  },
-
-	  measure: function(fn, ctx) {
-	    return create(this.fastdom, 'measure', fn, ctx);
-	  },
-
-	  clear: function(promise) {
-	    debug('clear', !!promise);
-	    if (promise.cancel) promise.cancel();
-	  },
-
-	  MegaPromise: MegaPromise
-	};
-
-	/**
-	 * Create a fastdom task wrapped in
-	 * a 'cancellable' Promise.
-	 *
-	 * @param  {FastDom}  fastdom
-	 * @param  {String}   type - 'measure'|'muatate'
-	 * @param  {Function} fn
-	 * @return {Promise}
-	 */
-	function create(fastdom, type, fn, ctx) {
-	  var task;
-
-	  var promise = new Promise(function(resolve, reject) {
-	    task = fastdom[type](function() {
-	      try { resolve(fn()); }
-	      catch (e) { reject(e); }
-	    }, ctx);
-	  });
-
-	  var cancelable = new MegaPromise(promise, {
-	    oncancel: function() {
-	      fastdom.clear(task);
-	    }
-	  });
-
-	  return cancelable;
-	}
-
-	var id = 0;
-
-	function MegaPromise(promise, options) {
-	  options = options || {};
-	  this.promise = Promise.resolve(promise);
-	  this.oncancel = options.oncancel;
-	  this.parent = options.parent;
-	  this.before = options.before;
-	  this.after = options.after;
-	  this.canceled = false;
-	  this.id = ++id;
-	  debug('created', this.id);
-	}
-
-	MegaPromise.prototype = {
-	  wrap: function(callback) {
-	    return arg => {
-	      if (this.canceled) return;
-	      if (this.before) this.before();
-	      var result = callback && callback(arg);
-	      if (this.after) this.after();
-	      if (result && result.then) this.sibling = result;
-	      return result;
-	    };
-	  },
-
-	  then: function(onsuccess, onerror) {
-	    var promise = this.promise.then(
-	      this.wrap(onsuccess),
-	      this.wrap(onerror)
-	    );
-
-	    return this.child = new MegaPromise(promise, {
-	      parent: this,
-	      before: this.before,
-	      after: this.after
-	    });
-	  },
-
-	  catch: function(callback) {
-	    var promise = this.promise.catch(this.wrap(callback));
-	    return this.child = new MegaPromise(promise, {
-	      parent: this,
-	      before: this.before,
-	      after: this.after
-	    });
-	  },
-
-	  cancel: function() {
-	    if (this.canceled) return;
-	    this.canceled = true;
-	    if (this.oncancel) this.oncancel();
-	    if (this.parent) this.parent.cancel();
-	    if (this.child) this.child.cancel();
-	    if (this.sibling) this.sibling.cancel();
-	    debug('canceled', this.id);
-	  },
-
-	  mixin: function(props) {
-	    Object.assign(this, props);
-	  }
-	};
-
-	// Expose to CJS, AMD or global
-	if (("function")[0] == 'f') !(__WEBPACK_AMD_DEFINE_RESULT__ = function() { return exports; }.call(exports, __webpack_require__, exports, module), __WEBPACK_AMD_DEFINE_RESULT__ !== undefined && (module.exports = __WEBPACK_AMD_DEFINE_RESULT__));
-	else if ((typeof module)[0] == 'o') module.exports = exports;
-	else window.fastdomPromised = exports;
-
-	})();
-
-/***/ },
+/* 1 */,
 /* 2 */
 /***/ function(module, exports) {
 

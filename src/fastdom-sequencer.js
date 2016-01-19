@@ -1,11 +1,15 @@
 
-var promised = require('fastdom/extensions/fastdom-promised');
 var fastdom = require('fastdom');
 
 var debug = 1 ? console.log.bind(console, '[sequencer]') : function() {};
 var symbol = Symbol();
 
-
+/**
+ * Intialize a new `Sequencer`
+ *
+ * @constructor
+ * @param {FastDom} fastdom
+ */
 function Sequencer(fastdom) {
   this.fastdom = fastdom;
   this.interactions = [];
@@ -53,15 +57,14 @@ Sequencer.prototype = {
    */
   on: function(el, type, task) {
     debug('on', el.localName, type);
-
-    var scoped = this.scopeFn(task, 'interaction');
+    var scoped = this.scopeFn('interaction', task);
     var data = el[symbol] || (el[symbol] = {
       callbacks: {},
       pending: {},
       interactions: {}
     });
 
-    // only allow one binding per event type
+    // only one binding per event type
     if (data.callbacks[type]) throw new Error('already listening');
 
     data.callbacks[type] = e => {
@@ -77,9 +80,42 @@ Sequencer.prototype = {
       });
     };
 
+    // attach the wrapped callback
     on(el, type, data.callbacks[type]);
   },
 
+  /**
+   * Unbind a callback from an event.
+   *
+   * If an interaciton is not 'complete'
+   * unbinding infers completion.
+   *
+   * @public
+   * @param  {HTMLElement} el
+   * @param  {String} type
+   * @param  {Function} task
+   */
+  off: function(el, type, task) {
+    var data = el[symbol];
+    var callback = data.callbacks && data.callbacks[type];
+    if (!callback) return;
+
+    var interaction = data.interactions[type];
+    interaction.resolve();
+
+    off(el, type, callback);
+    delete data.callbacks[type];
+  },
+
+  /**
+   * Create an `Interaction` to represent
+   * a user input and ongoing feedback
+   * that may be triggered in response.
+   *
+   * @param  {HTMLElement} el
+   * @param  {String} type
+   * @return {Interaction}
+   */
   createInteraction: function(el, type) {
     var interactions = el[symbol].interactions;
     var interaction = interactions[type];
@@ -100,18 +136,6 @@ Sequencer.prototype = {
     return interaction;
   },
 
-  off: function(el, type, task) {
-    var data = el[symbol];
-    var callback = data.callbacks && data.callbacks[type];
-    if (!callback) return;
-
-    var interaction = data.interactions[type];
-    interaction.resolve();
-
-    off(el, type, callback);
-    delete data.callbacks[type];
-  },
-
   /**
    * Schedule a task that triggers a CSS animation
    * or transition on an element.
@@ -122,11 +146,18 @@ Sequencer.prototype = {
    * Animation tasks are postponed by incomplete:
    *   - interactions
    *
+   * IDEA: Perhaps returning the Element would
+   * be a better way to provide the animation
+   * target?
+   *
    * @example
    *
    * sequencer.animate(element, () => {
    *   return element.classList.add('slide-in');
    * }).then(...)
+   *
+   * // with optional safety timeout
+   * sequencer.animate(element, 400, () => ...)
    *
    * @public
    * @param  {HTMLElement} el
@@ -135,26 +166,21 @@ Sequencer.prototype = {
    * @return {Promise}
    */
   animate: function(el, safety, task) {
-    debug('animate', el.localName, this.scope);
+    debug('animate (1)');
 
     // support optional second argument
     if (typeof safety == 'function') task = safety, safety = null;
 
     return this.after([this.interactions], () => {
-      debug('animate (2)', el.localName);
-      var scoped = this.scopeFn(task, this.scope, el).bind(this, el);
-      var fdTask = fastdomTask('mutate', scoped);
+      debug('animate (2)');
+      var promise = this.task('mutate', task.bind(this, el));
       var result;
 
-      var spromise = new SequencerPromise(this, fdTask.promise, {
-        wrapper: this.promiseScoper(this.scope),
-        oncancel: () => fastdom.clear(fdTask.task)
-      });
-
-      var complete = spromise
+      var complete = promise
         .then(_result => {
+          console.log('........', result);
           result = _result;
-          return animationend(el, safety);
+          return animationend(el || result, safety);
         })
 
         .then(() => {
@@ -164,6 +190,15 @@ Sequencer.prototype = {
 
       this.animations.push(complete);
       return complete;
+    });
+  },
+
+  task: function(type, fn, ctx) {
+    var scoped = this.scopeFn(this.scope, fn);
+    var task = fastdomTask('mutate', scoped, ctx);
+    return new SequencerPromise(this, task.promise, {
+      wrapper: this.scopeFn.bind(this, this.scope),
+      oncancel: () => fastdom.clear(task.id)
     });
   },
 
@@ -190,12 +225,7 @@ Sequencer.prototype = {
     debug('measure (1)');
     return this.after([this.interactions, this.animations], () => {
       debug('measure (2)');
-      var scoped = this.scopeFn(task, this.scope);
-      var fdTask = fastdomTask('measure', scoped);
-      return new SequencerPromise(this, fdTask.promise, {
-        wrapper: this.promiseScoper(this.scope),
-        oncancel: () => fastdom.clear(fdTask.task)
-      });
+      return this.task('measure', task, ctx);
     });
   },
 
@@ -220,15 +250,16 @@ Sequencer.prototype = {
     debug('mutate (1)');
     return this.after([this.interactions, this.animations], () => {
       debug('mutate (2)');
-      var scoped = this.scopeFn(task, this.scope);
-      var fdTask = fastdomTask('mutate', scoped);
-      return new SequencerPromise(this, fdTask.promise, {
-        wrapper: this.promiseScoper(this.scope),
-        oncancel: () => fastdom.clear(fdTask.task)
-      });
+      return this.task('mutate', task, ctx);
     });
   },
 
+  /**
+   * Clear a pending task.
+   *
+   * @public
+   * @param  {SequencerPromise} promise
+   */
   clear: function(promise) {
     debug('clear');
     if (promise.cancel) promise.cancel();
@@ -242,7 +273,7 @@ Sequencer.prototype = {
    * @param  {String}   scope
    * @return {Function}
    */
-  scopeFn: function(fn, scope) {
+  scopeFn: function(scope, fn) {
     var self = this;
     return function() {
       var previous = self.scope;
@@ -253,27 +284,6 @@ Sequencer.prototype = {
       debug('set scope', self.scope);
 
       try { result = fn.apply(this, arguments); }
-      catch (e) { error = e; }
-
-      self.scope = previous;
-      debug('restored scope', self.scope);
-      if (error) throw error;
-
-      return result;
-    };
-  },
-
-  promiseScoper: function(scope) {
-    var self = this;
-    return function(callback, args) {
-      var previous = self.scope;
-      var result;
-      var error;
-
-      self.scope = scope;
-      debug('set scope', self.scope);
-
-      try { result = callback.apply(this, args); }
       catch (e) { error = e; }
 
       self.scope = previous;
@@ -319,7 +329,7 @@ Sequencer.prototype = {
 
 /**
  * Create a fastdom task wrapped in
- * a 'cancellable' Promise.
+ * a Promise.
  *
  * @param  {FastDom}  fastdom
  * @param  {String}   type - 'measure'|'muatate'
@@ -327,16 +337,16 @@ Sequencer.prototype = {
  * @return {Promise}
  */
 function fastdomTask(type, fn, ctx) {
-  var task;
+  var id;
   var promise = new Promise((resolve, reject) => {
-    task = fastdom[type](function() {
+    id = fastdom[type](function() {
       try { resolve(fn()); }
       catch (e) { reject(e); }
     }, ctx);
   });
 
   return {
-    task: task,
+    id: id,
     promise: promise
   };
 }
@@ -344,6 +354,10 @@ function fastdomTask(type, fn, ctx) {
 /**
  * Represents an interaction that
  * can last a period of time.
+ *
+ * TODO: Introduce specific paths for 'scroll'
+ * and 'touchmove' events that listen to
+ * 'scrollend' amd 'touchend' respectively.
  *
  * @constructor
  * @param {Srting} type
@@ -355,7 +369,6 @@ function Interaction(type) {
 }
 
 Interaction.prototype = {
-  BUFFER: 300,
 
   /**
    * Define when the interaction should
@@ -364,7 +377,6 @@ Interaction.prototype = {
    * @example
    *
    * // each call extends the debounce timer
-   * interaction.reset();
    * interaction.reset();
    * interaction.reset();
    * interaction.reset();
@@ -402,7 +414,7 @@ Interaction.prototype = {
 
     // when no Promise is given we use a
     // debounce approach to judge completion
-    this.timeout = setTimeout(() => this.resolve(), this.BUFFER);
+    this.timeout = setTimeout(() => this.resolve(), 300);
   },
 
   /**
@@ -418,6 +430,62 @@ Interaction.prototype = {
 
 var id = 0;
 
+/**
+ * Wraps a `Promise`, providing additional
+ * functionality and hooks to wrap user
+ * defined callbacks.
+ *
+ * A `SequencerPromise` is a link in a
+ * chain of async tasks to be completed
+ * in series.
+ *
+ * NOTE: Chained syntax is optional and does
+ * not prevent users from using a familiar
+ * Promise syntax.
+ *
+ * @example
+ *
+ * // before: lots of boilerplate
+ * sequencer.mutate(...)
+ *   .then(() => sequencer.measure(...))
+ *   .then(() => sequencer.animate(...))
+ *   .then(() => sequencer.animate(...))
+ *   .then(...)
+ *
+ * // after: clean/terse
+ * sequencer
+ *   .mutate(...)
+ *   .measure(...)
+ *   .animate(...)
+ *   .animate(...)
+ *   .then(...)
+ *
+ * @example
+ *
+ * var li;
+ *
+ * sequencer
+ *   .mutate(() => {
+ *     li = document.createElement('li');
+ *     list.appendChild(li);
+ *     return li;
+ *   })
+ *
+ *   // previous return value can be used
+ *   // as target by omitting first argument
+ *   .animate(li => li.classList.add('grow'))
+ *
+ *   // or pass target as first param
+ *   .animate(li, () => li.classList.add('slide'));
+ *
+ * @constructor
+ * @param {Sequencer} sequencer
+ * @param {Promise} promise
+ * @param {Object} [options]
+ * @param {Function} [options.wrapper]
+ * @param {SequencerPromise} [options.parent]
+ * @param {Function} [options.oncancel]
+ */
 function SequencerPromise(sequencer, promise, options) {
   options = options || {};
   this.sequencer = sequencer;
@@ -431,24 +499,23 @@ function SequencerPromise(sequencer, promise, options) {
 }
 
 SequencerPromise.prototype = {
-  wrap: function(callback) {
+  _wrap: function(callback) {
     if (!callback) return;
     var self = this;
-    return function() {
+    callback = this.wrapper(callback);
+    return value => {
       if (self.canceled) return;
-      var result = self.wrapper(callback, arguments);
+      var result = callback(value);
       if (result && result.then) self.sibling = result;
       return result;
     };
   },
 
   then: function(onsuccess, onerror) {
-    var promise = this.promise.then(
-      this.wrap(onsuccess),
-      this.wrap(onerror)
-    );
-
-    return this.create(promise);
+    return this.create(this.promise.then(
+      this._wrap(onsuccess),
+      this._wrap(onerror)
+    ));
   },
 
   create: function(promise) {
@@ -459,8 +526,7 @@ SequencerPromise.prototype = {
   },
 
   catch: function(callback) {
-    var promise = this.promise.catch(this.wrap(callback));
-    return this.create(promise);
+    return this.create(this.promise.catch(this._wrap(callback)));
   },
 
   cancel: function() {
@@ -474,24 +540,23 @@ SequencerPromise.prototype = {
   },
 
   measure: function(task, ctx) {
-    var promise = this.promise.then(() => this.sequencer.measure(task, ctx));
-    return this.create(promise);
+    return this.create(this.promise.then(result =>
+      this.sequencer.measure(() => task(result), ctx)));
   },
 
   mutate: function(task, ctx) {
-    var promise = this.promise.then(() => this.sequencer.mutate(task, ctx));
-    return this.create(promise);
+    return this.create(this.promise.then(result =>
+      this.sequencer.mutate(() => task(result), ctx)));
   },
 
   animate: function(el, safety, task) {
 
-    // support various argument patterns
+    // el and safety arguments are both optional
     if (typeof el == 'number') task = safety, safety = el, el = null;
     else if (typeof el == 'function') task = el, safety = el = null;
 
-    return this.create(this.promise.then(result => {
-      return this.sequencer.animate(el || result, safety, task);
-    }));
+    return this.create(this.promise.then(result =>
+      this.sequencer.animate(el || result, safety, task)));
   }
 };
 
@@ -545,6 +610,9 @@ function animationend(el, safety) {
   return defer.promise;
 }
 
+/**
+ * @constructor
+ */
 function Deferred() {
   this.promise = new Promise((resolve, reject) => {
     this.resolve = resolve;

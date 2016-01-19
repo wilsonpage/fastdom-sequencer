@@ -2,6 +2,7 @@
 /*global suite, setup, teardown, test, assert, sinon, sequencer*/
 
 suite('fastdom', function() {
+  var SequencerPromise = sequencer.SequencerPromise;
   var dom;
   var el;
 
@@ -12,6 +13,7 @@ suite('fastdom', function() {
     el = document.createElement('div');
     el.style.height = el.style.width = '100px';
     el.style.transition = 'transform 300ms';
+    el.style.background = 'red';
     el.style.overflowY = 'scroll';
     var scrollContent = document.createElement('div');
     scrollContent.style.height = '1000%';
@@ -311,19 +313,49 @@ suite('fastdom', function() {
           spys[2]();
         });
     });
+
+    test('return values are passed on', function() {
+      var start;
+
+      return sequencer
+        .measure(() => el.clientHeight)
+        .mutate(value => el.style.height = (value * 2) + 'px')
+        .measure(px => {
+          assert.equal(px, '200px');
+          assert.equal(el.clientHeight, 200);
+        })
+
+        .animate(() => {
+          start = Date.now();
+          el.style.transform = 'scale(2)';
+          return el;
+        })
+
+        .animate(el => el.style.transform = 'scale(1)')
+
+        .then(result => {
+          assert.equal(result, 'scale(1)');
+          var elapsed = Date.now() - start;
+          assert.isAtLeast(elapsed, 600);
+        });
+    });
   });
 
   suite('SequencerPromise', function() {
+    var wrapper = callback => arg => callback(arg);
+
     test('chained .then()s are all wrapped', function() {
       var defer = new Deferred();
       var state = 'not-running';
 
       var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
-        wrapper: (callback, args) => {
-          state = 'running';
-          var result = callback.apply(this, args);
-          state = 'not-running';
-          return result;
+        wrapper: callback => {
+          return value => {
+            state = 'running';
+            var result = callback(value);
+            state = 'not-running';
+            return result;
+          };
         }
       });
 
@@ -343,11 +375,13 @@ suite('fastdom', function() {
       var state = 'not-running';
 
       var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
-        wrapper: (callback, args) => {
-          state = 'running';
-          var result = callback.apply(this, args);
-          state = 'not-running';
-          return result;
+        wrapper: callback => {
+          return value => {
+            state = 'running';
+            var result = callback(value);
+            state = 'not-running';
+            return result;
+          };
         }
       });
 
@@ -364,15 +398,9 @@ suite('fastdom', function() {
 
     test('throwing inside .then() hits .catch()', function() {
       var defer = new Deferred();
-      var state = 'not-running';
 
       var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
-        wrapper: (callback, args) => {
-          state = 'running';
-          var result = callback.apply(this, args);
-          state = 'not-running';
-          return result;
-        }
+        wrapper: wrapper
       });
 
       defer.resolve('foo');
@@ -388,29 +416,92 @@ suite('fastdom', function() {
 
     test('.then() recieves arguments', function() {
       var defer = new Deferred();
-      var state = 'not-running';
-
-      var wrapped = new sequencer.SequencerPromise(sequencer, defer.promise, {
-        wrapper: (callback, args) => {
-          state = 'running';
-          var result = callback.apply(this, args);
-          state = 'not-running';
-          return result;
-        }
+      var wrapped = new SequencerPromise(sequencer, defer.promise, {
+        wrapper: wrapper
       });
 
       defer.resolve('foo');
 
       return wrapped.then(result => {
         assert.equal(result, 'foo');
-        assert.equal(state, 'running');
         return 'bar';
       })
 
       .then(result => {
-        assert.equal(state, 'running');
         assert.equal(result, 'bar');
       });
+    });
+
+    test('calling .cancel() prevents ancestors running', function() {
+      var spys = [sinon.spy(), sinon.spy(), sinon.spy()];
+      var defer = new Deferred();
+      var first = new SequencerPromise(sequencer, defer.promise, {
+        wrapper: wrapper
+      });
+
+      var last = first
+        .then(spys[0])
+        .then(spys[1])
+        .then(spys[2]);
+
+      last.cancel();
+      defer.resolve();
+
+      return defer.promise.then(() => {
+        sinon.assert.notCalled(spys[0]);
+        sinon.assert.notCalled(spys[1]);
+        sinon.assert.notCalled(spys[2]);
+      });
+    });
+
+    test('calling .cancel() prevents descendants running', function() {
+      var spys = [sinon.spy(), sinon.spy(), sinon.spy()];
+      var defer = new Deferred();
+      var first = new SequencerPromise(sequencer, defer.promise, {
+        wrapper: wrapper
+      });
+
+      first
+        .then(spys[0])
+        .then(spys[1])
+        .then(spys[2]);
+
+      first.cancel();
+      defer.resolve();
+
+      return defer.promise.then(() => {
+        sinon.assert.notCalled(spys[0]);
+        sinon.assert.notCalled(spys[1]);
+        sinon.assert.notCalled(spys[2]);
+      });
+    });
+
+    test('calling .cancel() prevents siblings running', function() {
+      var spy = sinon.spy();
+
+      create(Promise.resolve())
+        .then(() => create(Promise.resolve()).then(spy));
+
+      return wait()
+        .then(() => {
+          sinon.assert.calledOnce(spy);
+          spy.reset();
+
+          var spromise = create(Promise.resolve()).then(() => {
+            return create(Promise.resolve()).then(spy);
+          });
+
+          spromise.cancel();
+          return wait();
+        })
+
+        .then(() => {
+          sinon.assert.notCalled(spy);
+        });
+
+      function create(promise) {
+        return new SequencerPromise(sequencer, promise, { wrapper: wrapper });
+      }
     });
   });
 
@@ -423,5 +514,9 @@ suite('fastdom', function() {
       this.resolve = resolve;
       this.reject = reject;
     });
+  }
+
+  function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 });
