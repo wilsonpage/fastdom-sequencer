@@ -74,7 +74,7 @@ Sequencer.prototype = {
 
       if (pending) this.fastdom.clear(pending);
 
-      data.pending[type] = this.fastdom.measure(() => {
+      data.pending[type] = this.fastdom.measure(function() {
         delete data.pending[type];
         interaction.reset(scoped());
       });
@@ -124,10 +124,10 @@ Sequencer.prototype = {
     interaction = new Interaction(type);
 
     var complete = interaction.complete
-      .then(() => {
+      .then(function() {
         remove(this.interactions, complete);
         delete interactions[type];
-      });
+      }.bind(this));
 
     this.interactions.push(complete);
     interactions[type] = interaction;
@@ -171,26 +171,26 @@ Sequencer.prototype = {
     // support optional second argument
     if (typeof safety == 'function') task = safety, safety = null;
 
-    return this.after([this.interactions], () => {
+    return this.after([this.interactions], function() {
       debug('animate (2)');
       var promise = this.task('mutate', task.bind(this, el));
       var result;
 
       var complete = promise
-        .then(_result => {
+        .then(function(_result) {
           console.log('........', result);
           result = _result;
           return animationend(el || result, safety);
         })
 
-        .then(() => {
+        .then(function() {
           remove(this.animations, complete);
           return result;
-        });
+        }.bind(this));
 
       this.animations.push(complete);
       return complete;
-    });
+    }.bind(this));
   },
 
   task: function(type, fn, ctx) {
@@ -198,7 +198,7 @@ Sequencer.prototype = {
     var task = fastdomTask('mutate', scoped, ctx);
     return new SequencerPromise(this, task.promise, {
       wrapper: this.scopeFn.bind(this, this.scope),
-      oncancel: () => fastdom.clear(task.id)
+      oncancel: function() { fastdom.clear(task.id); }
     });
   },
 
@@ -223,10 +223,10 @@ Sequencer.prototype = {
    */
   measure: function(task, ctx) {
     debug('measure (1)');
-    return this.after([this.interactions, this.animations], () => {
+    return this.after([this.interactions, this.animations], function() {
       debug('measure (2)');
       return this.task('measure', task, ctx);
-    });
+    }.bind(this));
   },
 
   /**
@@ -248,10 +248,10 @@ Sequencer.prototype = {
    */
   mutate: function(task, ctx) {
     debug('mutate (1)');
-    return this.after([this.interactions, this.animations], () => {
+    return this.after([this.interactions, this.animations], function() {
       debug('mutate (2)');
       return this.task('mutate', task, ctx);
-    });
+    }.bind(this));
   },
 
   /**
@@ -338,7 +338,7 @@ Sequencer.prototype = {
  */
 function fastdomTask(type, fn, ctx) {
   var id;
-  var promise = new Promise((resolve, reject) => {
+  var promise = new Promise(function(resolve, reject) {
     id = fastdom[type](function() {
       try { resolve(fn()); }
       catch (e) { reject(e); }
@@ -414,7 +414,7 @@ Interaction.prototype = {
 
     // when no Promise is given we use a
     // debounce approach to judge completion
-    this.timeout = setTimeout(() => this.resolve(), 300);
+    this.timeout = setTimeout(this.resolve.bind(this), 300);
   },
 
   /**
@@ -503,7 +503,7 @@ SequencerPromise.prototype = {
     if (!callback) return;
     var self = this;
     callback = this.wrapper(callback);
-    return value => {
+    return function(value) {
       if (self.canceled) return;
       var result = callback(value);
       if (result && result.then) self.sibling = result;
@@ -540,13 +540,19 @@ SequencerPromise.prototype = {
   },
 
   measure: function(task, ctx) {
-    return this.create(this.promise.then(result =>
-      this.sequencer.measure(() => task(result), ctx)));
+    return this.create(this.promise.then(function(result) {
+      return this.sequencer.measure(function() {
+        return task(result);
+      }, ctx);
+    }.bind(this)));
   },
 
   mutate: function(task, ctx) {
-    return this.create(this.promise.then(result =>
-      this.sequencer.mutate(() => task(result), ctx)));
+    return this.create(this.promise.then(function(result) {
+      return this.sequencer.mutate(function() {
+        return task(result);
+      }, ctx);
+    }.bind(this)));
   },
 
   animate: function(el, safety, task) {
@@ -555,8 +561,9 @@ SequencerPromise.prototype = {
     if (typeof el == 'number') task = safety, safety = el, el = null;
     else if (typeof el == 'function') task = el, safety = el = null;
 
-    return this.create(this.promise.then(result =>
-      this.sequencer.animate(el || result, safety, task)));
+    return this.create(this.promise.then(function(result) {
+      return this.sequencer.animate(el || result, safety, task);
+    }.bind(this)));
   }
 };
 
@@ -614,10 +621,10 @@ function animationend(el, safety) {
  * @constructor
  */
 function Deferred() {
-  this.promise = new Promise((resolve, reject) => {
+  this.promise = new Promise(function(resolve, reject) {
     this.resolve = resolve;
     this.reject = reject;
-  });
+  }.bind(this));
 }
 
 /**

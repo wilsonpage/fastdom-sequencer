@@ -7,7 +7,7 @@
 		exports["sequencer"] = factory(require("fastdom"));
 	else
 		root["sequencer"] = factory(root["fastdom"]);
-})(this, function(__WEBPACK_EXTERNAL_MODULE_2__) {
+})(this, function(__WEBPACK_EXTERNAL_MODULE_1__) {
 return /******/ (function(modules) { // webpackBootstrap
 /******/ 	// The module cache
 /******/ 	var installedModules = {};
@@ -54,8 +54,8 @@ return /******/ (function(modules) { // webpackBootstrap
 /* 0 */
 /***/ function(module, exports, __webpack_require__) {
 
-
-	var fastdom = __webpack_require__(2);
+	
+	var fastdom = __webpack_require__(1);
 
 	var debug = 1 ? console.log.bind(console, '[sequencer]') : function() {};
 	var symbol = Symbol();
@@ -130,7 +130,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	      if (pending) this.fastdom.clear(pending);
 
-	      data.pending[type] = this.fastdom.measure(() => {
+	      data.pending[type] = this.fastdom.measure(function() {
 	        delete data.pending[type];
 	        interaction.reset(scoped());
 	      });
@@ -180,10 +180,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	    interaction = new Interaction(type);
 
 	    var complete = interaction.complete
-	      .then(() => {
+	      .then(function() {
 	        remove(this.interactions, complete);
 	        delete interactions[type];
-	      });
+	      }.bind(this));
 
 	    this.interactions.push(complete);
 	    interactions[type] = interaction;
@@ -227,25 +227,26 @@ return /******/ (function(modules) { // webpackBootstrap
 	    // support optional second argument
 	    if (typeof safety == 'function') task = safety, safety = null;
 
-	    return this.after([this.interactions], () => {
+	    return this.after([this.interactions], function() {
 	      debug('animate (2)');
 	      var promise = this.task('mutate', task.bind(this, el));
 	      var result;
 
 	      var complete = promise
-	        .then(_result => {
+	        .then(function(_result) {
+	          console.log('........', result);
 	          result = _result;
 	          return animationend(el || result, safety);
 	        })
 
-	        .then(() => {
+	        .then(function() {
 	          remove(this.animations, complete);
 	          return result;
-	        });
+	        }.bind(this));
 
 	      this.animations.push(complete);
 	      return complete;
-	    });
+	    }.bind(this));
 	  },
 
 	  task: function(type, fn, ctx) {
@@ -253,7 +254,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	    var task = fastdomTask('mutate', scoped, ctx);
 	    return new SequencerPromise(this, task.promise, {
 	      wrapper: this.scopeFn.bind(this, this.scope),
-	      oncancel: () => fastdom.clear(task.id)
+	      oncancel: function() { fastdom.clear(task.id); }
 	    });
 	  },
 
@@ -278,10 +279,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	   */
 	  measure: function(task, ctx) {
 	    debug('measure (1)');
-	    return this.after([this.interactions, this.animations], () => {
+	    return this.after([this.interactions, this.animations], function() {
 	      debug('measure (2)');
 	      return this.task('measure', task, ctx);
-	    });
+	    }.bind(this));
 	  },
 
 	  /**
@@ -303,10 +304,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	   */
 	  mutate: function(task, ctx) {
 	    debug('mutate (1)');
-	    return this.after([this.interactions, this.animations], () => {
+	    return this.after([this.interactions, this.animations], function() {
 	      debug('mutate (2)');
 	      return this.task('mutate', task, ctx);
-	    });
+	    }.bind(this));
 	  },
 
 	  /**
@@ -393,7 +394,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	 */
 	function fastdomTask(type, fn, ctx) {
 	  var id;
-	  var promise = new Promise((resolve, reject) => {
+	  var promise = new Promise(function(resolve, reject) {
 	    id = fastdom[type](function() {
 	      try { resolve(fn()); }
 	      catch (e) { reject(e); }
@@ -469,7 +470,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	    // when no Promise is given we use a
 	    // debounce approach to judge completion
-	    this.timeout = setTimeout(() => this.resolve(), 300);
+	    this.timeout = setTimeout(this.resolve.bind(this), 300);
 	  },
 
 	  /**
@@ -558,7 +559,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	    if (!callback) return;
 	    var self = this;
 	    callback = this.wrapper(callback);
-	    return value => {
+	    return function(value) {
 	      if (self.canceled) return;
 	      var result = callback(value);
 	      if (result && result.then) self.sibling = result;
@@ -595,13 +596,19 @@ return /******/ (function(modules) { // webpackBootstrap
 	  },
 
 	  measure: function(task, ctx) {
-	    return this.create(this.promise.then(result =>
-	      this.sequencer.measure(() => task(result), ctx)));
+	    return this.create(this.promise.then(function(result) {
+	      return this.sequencer.measure(function() {
+	        return task(result);
+	      }, ctx);
+	    }.bind(this)));
 	  },
 
 	  mutate: function(task, ctx) {
-	    return this.create(this.promise.then(result =>
-	      this.sequencer.mutate(() => task(result), ctx)));
+	    return this.create(this.promise.then(function(result) {
+	      return this.sequencer.mutate(function() {
+	        return task(result);
+	      }, ctx);
+	    }.bind(this)));
 	  },
 
 	  animate: function(el, safety, task) {
@@ -610,8 +617,9 @@ return /******/ (function(modules) { // webpackBootstrap
 	    if (typeof el == 'number') task = safety, safety = el, el = null;
 	    else if (typeof el == 'function') task = el, safety = el = null;
 
-	    return this.create(this.promise.then(result =>
-	      this.sequencer.animate(el || result, safety, task)));
+	    return this.create(this.promise.then(function(result) {
+	      return this.sequencer.animate(el || result, safety, task);
+	    }.bind(this)));
 	  }
 	};
 
@@ -669,10 +677,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	 * @constructor
 	 */
 	function Deferred() {
-	  this.promise = new Promise((resolve, reject) => {
+	  this.promise = new Promise(function(resolve, reject) {
 	    this.resolve = resolve;
 	    this.reject = reject;
-	  });
+	  }.bind(this));
 	}
 
 	/**
@@ -689,11 +697,10 @@ return /******/ (function(modules) { // webpackBootstrap
 
 
 /***/ },
-/* 1 */,
-/* 2 */
+/* 1 */
 /***/ function(module, exports) {
 
-	module.exports = __WEBPACK_EXTERNAL_MODULE_2__;
+	module.exports = __WEBPACK_EXTERNAL_MODULE_1__;
 
 /***/ }
 /******/ ])
