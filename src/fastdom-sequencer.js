@@ -67,7 +67,7 @@ Sequencer.prototype = {
     // only one binding per event type
     if (data.callbacks[type]) throw new Error('already listening');
 
-    data.callbacks[type] = e => {
+    data.callbacks[type] = function(e) {
       debug('event', type, this.scope);
       var interaction = this.createInteraction(el, type);
       var pending = data.pending[type];
@@ -78,7 +78,7 @@ Sequencer.prototype = {
         delete data.pending[type];
         interaction.reset(scoped());
       });
-    };
+    }.bind(this);
 
     // attach the wrapped callback
     on(el, type, data.callbacks[type]);
@@ -320,8 +320,13 @@ Sequencer.prototype = {
     var flattened = [].concat.apply([], blockers);
     if (!flattened.length) return done();
     return Promise.all(flattened)
-      .then(() => new Promise(resolve => setTimeout(resolve)))
-      .then(() => this.after(blockers, done, scope));
+      .then(function() {
+        return new Promise(function(resolve) { setTimeout(resolve); });
+      })
+
+      .then(function() {
+        return this.after(blockers, done, scope);
+      }.bind(this));
   },
 
   SequencerPromise: SequencerPromise
