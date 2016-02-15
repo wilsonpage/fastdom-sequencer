@@ -33,8 +33,9 @@ sequencer.on(element, 'scroll', function(e) {
 
 ```js
 sequencer.on(element, 'click', function(e) {
-  return sequencer.animate(element, function() {
+  return sequencer.animate(function() {
     element.classList.add('grow');
+    return element;
   });
 });
 ```
@@ -42,8 +43,15 @@ sequencer.on(element, 'click', function(e) {
 ```js
 sequencer.on(element, 'click', function(e) {
   return sequencer
-    .animate(element, () => element.classList.add('grow')
-    .animate(element, () => element.classList.add('shrink');
+    .animate(() => {
+      element.classList.add('grow');
+      return element;
+    })
+
+    .animate(() => {
+      element.classList.add('shrink');
+      return element;
+    })
 });
 ```
 
@@ -55,11 +63,15 @@ sequencer.off(element, 'click', callback);
 
 ### sequencer#animate()
 
-Should contain any animation/transition code.
+Should contain any animation/transition code and return the target element.
 
 ```js
 sequencer
-  .animate(element, () => element.style.transform = 'translateY(100%)'))
+  .animate(() => {
+    element.style.transform = 'translateY(100%)');
+    return element;
+  })
+
   .then(() => {
     // transition/animation end
   });
@@ -74,7 +86,7 @@ sequencer
 Should contain any code that is likely to cause document reflow/layout.
 
 ```js
-sequencer.mutate(element, () => {
+sequencer.mutate(() => {
   var li = document.createElement('li');
   list.appendChild(li);
 });
@@ -86,13 +98,17 @@ sequencer.mutate(element, () => {
 
 ### Chaining
 
-Tasks can be chained together so that they happen sequencially in series.
+Tasks can be chained together so that they happen sequentially.
 
 ```js
 sequencer
   .measure(() => list.clientHeight)
   .mutate(height => list.appendChild(item))
-  .animate(item, () => item.classList.add('reveal'))
+  .animate(() => {
+    item.classList.add('reveal');
+    return item;
+  })
+
   .then(() => {
     console.log('all done!');
   });
