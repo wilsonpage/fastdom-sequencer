@@ -1,7 +1,7 @@
 {
   "name": "fastdom-sequencer",
   "description": "",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "fastdom-sequencer.js",
   "scripts": {
     "unit": "karma start test/karma.conf.js --single-run",
