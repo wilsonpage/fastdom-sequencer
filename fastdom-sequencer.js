@@ -55,9 +55,24 @@ return /******/ (function(modules) { // webpackBootstrap
 /***/ function(module, exports, __webpack_require__) {
 
 	
+	/**
+	 * Dependencies
+	 */
+
 	var fastdom = __webpack_require__(1);
 
+	/**
+	 * Mini logger.
+	 *
+	 * @type {Function}
+	 */
 	var debug = 1 ? console.log.bind(console, '[sequencer]') : function() {};
+
+	/**
+	 * Used to store state on Elements.
+	 *
+	 * @type {Symbol}
+	 */
 	var symbol = Symbol();
 
 	/**
@@ -72,6 +87,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	  this.animations = [];
 	  this.scope = null;
 	}
+
 
 	Sequencer.prototype = {
 
@@ -113,7 +129,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	   */
 	  on: function(el, type, task) {
 	    debug('on', el.localName, type);
-	    var scoped = this.scopeFn('interaction', task);
+	    var scoped = this.scopeFn('nested', task);
 	    var data = el[symbol] || (el[symbol] = {
 	      callbacks: {},
 	      pending: {},
@@ -175,15 +191,16 @@ return /******/ (function(modules) { // webpackBootstrap
 	  createInteraction: function(el, type) {
 	    var interactions = el[symbol].interactions;
 	    var interaction = interactions[type];
+	    var self = this;
 
 	    if (interaction) return interaction;
 	    interaction = new Interaction(type);
 
 	    var complete = interaction.complete
 	      .then(function() {
-	        remove(this.interactions, complete);
+	        remove(self.interactions, complete);
 	        delete interactions[type];
-	      }.bind(this));
+	      });
 
 	    this.interactions.push(complete);
 	    interactions[type] = interaction;
@@ -208,53 +225,92 @@ return /******/ (function(modules) { // webpackBootstrap
 	   *
 	   * @example
 	   *
-	   * sequencer.animate(element, () => {
-	   *   return element.classList.add('slide-in');
+	   * sequencer.animate(() => {
+	   *   element.classList.add('slide-in');
+	   *   return element;
 	   * }).then(...)
 	   *
 	   * // with optional safety timeout
-	   * sequencer.animate(element, 400, () => ...)
+	   * sequencer.animate(400, () => ...)
 	   *
 	   * @public
-	   * @param  {HTMLElement} el
-	   * @param  {Number}      [safety]
-	   * @param  {Function}    task
+	   * @param  {(Number|Object)} [safety]
+	   * @param  {Function} task
+	   * @param  {Object} [ctx]
 	   * @return {Promise}
 	   */
-	  animate: function(el, safety, task) {
+	  animate: function(safety, task, ctx) {
 	    debug('animate (1)');
+	    var self = this;
+	    var arg;
 
-	    // support optional second argument
-	    if (typeof safety == 'function') task = safety, safety = null;
+	    // support optional first argument: `safety`
+	    switch (typeof safety) {
+	      case 'function': ctx = task, task = safety, safety = null; break;
+	      case 'object':
+	        arg = safety.arg;
+	        ctx = safety.ctx;
+	        task = arg ? safety.task.bind(ctx, arg) : safety.task;
+	        safety = safety.safety;
+	    }
 
 	    return this.after([this.interactions], function() {
 	      debug('animate (2)');
-	      var promise = this.task('mutate', task.bind(this, el));
+	      var promise = self.task('mutate', task, ctx);
 	      var result;
 
 	      var complete = promise
 	        .then(function(_result) {
-	          console.log('........', result);
 	          result = _result;
-	          return animationend(el || result, safety);
+
+	          // if the task returns a
+	          // Promise then use that as
+	          // an indication of completion.
+	          if (result instanceof HTMLElement) return animationend(result, safety);
+	          else if (arg instanceof HTMLElement) return animationend(arg, safety);
+	          else throw new Error('.animate() must be passed or return a target Element');
 	        })
 
 	        .then(function() {
-	          remove(this.animations, complete);
+	          remove(self.animations, complete);
 	          return result;
-	        }.bind(this));
+	        });
 
-	      this.animations.push(complete);
+	      self.animations.push(complete);
 	      return complete;
-	    }.bind(this));
+	    });
 	  },
 
 	  task: function(type, fn, ctx) {
-	    var scoped = this.scopeFn(this.scope, fn);
+	    var scoped = this.scopeFn('nested', fn);
 	    var task = fastdomTask('mutate', scoped, ctx);
-	    return new SequencerPromise(this, task.promise, {
-	      wrapper: this.scopeFn.bind(this, this.scope),
+	    return this.promise(task.promise, {
 	      oncancel: function() { fastdom.clear(task.id); }
+	    });
+	  },
+
+	  /**
+	   * Wraps a vanilla Promise adding
+	   * sequencer APIs.
+	   *
+	   * Useful for begining a chain from
+	   * a vanilla Promise.
+	   *
+	   * @example
+	   *
+	   * sequencer.promise(Promise.resolve())
+	   *   .mutate(...);
+	   *
+	   * @public
+	   * @param  {Promise} promise
+	   * @param  {Object} [options]
+	   * @param  {Object} [options.oncancel]
+	   * @return {SequencerPromise}
+	   */
+	  promise: function(promise, options) {
+	    return new SequencerPromise(this, promise, {
+	      wrapper: this.scopeFn.bind(this, this.scope),
+	      oncancel: options && options.oncancel
 	    });
 	  },
 
@@ -371,11 +427,12 @@ return /******/ (function(modules) { // webpackBootstrap
 	   */
 	  after: function(blockers, done, scope) {
 	    scope = scope || this.scope;
-	    if (scope == 'interaction') return done();
+	    if (scope == 'nested') return done();
 	    debug('waiting till after', blockers);
 	    var flattened = [].concat.apply([], blockers);
 	    if (!flattened.length) return done();
-	    return Promise.all(flattened)
+
+	    var promise = Promise.all(flattened)
 	      .then(function() {
 	        return new Promise(function(resolve) { setTimeout(resolve); });
 	      })
@@ -383,10 +440,13 @@ return /******/ (function(modules) { // webpackBootstrap
 	      .then(function() {
 	        return this.after(blockers, done, scope);
 	      }.bind(this));
+
+	     return this.promise(promise);
 	  },
 
 	  SequencerPromise: SequencerPromise
 	};
+
 
 	/**
 	 * Create a fastdom task wrapped in
@@ -401,9 +461,12 @@ return /******/ (function(modules) { // webpackBootstrap
 	  var id;
 	  var promise = new Promise(function(resolve, reject) {
 	    id = fastdom[type](function() {
-	      try { resolve(fn()); }
+	      try {
+	        var result = fn.call(ctx);
+	        resolve(result);
+	      }
 	      catch (e) { reject(e); }
-	    }, ctx);
+	    });
 	  });
 
 	  return {
@@ -489,8 +552,6 @@ return /******/ (function(modules) { // webpackBootstrap
 	  }
 	};
 
-	var id = 0;
-
 	/**
 	 * Wraps a `Promise`, providing additional
 	 * functionality and hooks to wrap user
@@ -552,11 +613,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	  this.sequencer = sequencer;
 	  this.promise = Promise.resolve(promise);
 	  this.oncancel = options.oncancel;
-	  this.parent = options.parent;
 	  this.wrapper = options.wrapper;
+	  this.parent = options.parent;
 	  this.canceled = false;
-	  this.id = ++id;
-	  debug('created', this.id);
+	  debug('created');
 	}
 
 	SequencerPromise.prototype = {
@@ -601,30 +661,37 @@ return /******/ (function(modules) { // webpackBootstrap
 	  },
 
 	  measure: function(task, ctx) {
-	    return this.create(this.promise.then(function(result) {
-	      return this.sequencer.measure(function() {
+	    var sequencer = this.sequencer;
+	    return this.then(function(result) {
+	      return sequencer.measure(function() {
 	        return task(result);
 	      }, ctx);
-	    }.bind(this)));
+	    });
 	  },
 
 	  mutate: function(task, ctx) {
-	    return this.create(this.promise.then(function(result) {
-	      return this.sequencer.mutate(function() {
+	    var sequencer = this.sequencer;
+	    return this.then(function(result) {
+	      return sequencer.mutate(function() {
 	        return task(result);
 	      }, ctx);
-	    }.bind(this)));
+	    });
 	  },
 
-	  animate: function(el, safety, task) {
+	  animate: function(safety, task, ctx) {
+	    var sequencer = this.sequencer;
 
-	    // el and safety arguments are both optional
-	    if (typeof el == 'number') task = safety, safety = el, el = null;
-	    else if (typeof el == 'function') task = el, safety = el = null;
+	    // safety argument is optional
+	    if (typeof safety === 'function') ctx = task, task = safety, safety = null;
 
-	    return this.create(this.promise.then(function(result) {
-	      return this.sequencer.animate(el || result, safety, task);
-	    }.bind(this)));
+	    return this.then(function(result) {
+	      return sequencer.animate({
+	        safety: safety,
+	        arg: result,
+	        task: task,
+	        ctx: ctx
+	      });
+	    });
 	  }
 	};
 
@@ -657,7 +724,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	 * @return {Promise}
 	 */
 	function animationend(el, safety) {
-	  debug('animationend', el.localName);
+	  debug('animationend', el.localName, el.className);
 	  var defer = new Deferred();
 	  var timeout;
 
@@ -668,7 +735,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	  function ended(e) {
 	    if (e && e.target !== el) return;
-	    debug('animation ended');
+	    debug('animation ended', el.className);
 	    off(el, 'animationend', ended);
 	    off(el, 'transitionend', ended);
 	    clearTimeout(timeout);

@@ -46,10 +46,11 @@ suite('fastdom', function() {
       var start = Date.now();
 
       sequencer.on(el, 'click', function() {
-        return sequencer.animate(el, function() {
+        return sequencer.animate(function() {
           el.style.transform = 'translateY(100%)';
           assert.isAtMost(Date.now() - start, 100);
-        }).then(done);
+          return el;
+        }).then(() => done());
       });
 
       el.dispatchEvent(new CustomEvent('click'));
@@ -133,8 +134,9 @@ suite('fastdom', function() {
     test('it resolves when the animation ends', function() {
       var start = Date.now();
 
-      return sequencer.animate(el, () => {
+      return sequencer.animate(() => {
         el.style.transform = 'translateY(100%)';
+        return el;
       })
 
       .then(() => {
@@ -158,8 +160,9 @@ suite('fastdom', function() {
 
       var start = Date.now();
 
-      sequencer.animate(el, () => {
+      sequencer.animate(() => {
         el.style.transform = 'translateY(100%)';
+        return el;
       })
 
       .then(() => {
@@ -174,9 +177,10 @@ suite('fastdom', function() {
     test('it resolves after the (optional) safety timeout when `...end` does not fire', function() {
       var start;
 
-      return sequencer.animate(el, 100, () => {
+      return sequencer.animate(100, () => {
           start = Date.now();
           // do nothing ...
+          return el;
         })
 
         .then(() => {
@@ -224,15 +228,17 @@ suite('fastdom', function() {
       var mutationTask = sinon.spy();
       var animationEnded = sinon.spy();
 
-      var animation = sequencer.animate(el, () => {
-        el.style.transform = 'translateY(100%)';
-      })
+      var animation = sequencer
+        .animate(() => {
+          el.style.transform = 'translateY(100%)';
+          return el;
+        })
 
-      .then(() => sequencer.animate(el, () => {
-        el.style.transform = 'translateY(0%)';
-      }))
+        .animate(el => {
+          el.style.transform = 'translateY(0%)';
+        })
 
-      .then(animationEnded);
+        .then(animationEnded);
 
       var mutation = sequencer.mutate(mutationTask);
 
@@ -300,7 +306,7 @@ suite('fastdom', function() {
           return el;
         })
 
-        .animate(el, () => {
+        .animate(el => {
           el.style.transform = 'translateY(100%)';
           spys[1]();
           return el;
@@ -338,6 +344,42 @@ suite('fastdom', function() {
           var elapsed = Date.now() - start;
           assert.isAtLeast(elapsed, 600);
         });
+    });
+
+    suite('nesting', function() {
+      test('nested tasks should never be blocked', function() {
+
+      });
+    });
+
+    suite('.promise()', function() {
+      test('it wraps a vanilla promise', function() {
+        return sequencer.promise(Promise.resolve('foo'))
+          .mutate(function(result) {
+            assert.equal(result, 'foo');
+          });
+      });
+    });
+
+    test('returning a .animate() Promise delays resolution', function() {
+      var start;
+
+      return sequencer
+        .measure(() => el.clientHeight)
+        .mutate(value => el.style.height = (value * 2) + 'px')
+        .then(() => scale(el, 2))
+        .then(() => {
+          var elapsed = Date.now() - start;
+          assert.isAtLeast(elapsed, 300);
+        });
+
+      function scale(el, value) {
+        return sequencer.animate(() => {
+          start = Date.now();
+          el.style.transform = 'scale(' + value + ')';
+          return el;
+        });
+      }
     });
   });
 
