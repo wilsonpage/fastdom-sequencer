@@ -1,3 +1,7 @@
+> ⚠️ This project is incomplete
+
+---
+
 # fastdom-sequencer
 
 A [`fastdom`](http://github.com/wilsonpage/fastdom) extension that prioritises tasks and executes them in 'sequence' for the best possible render performance.
